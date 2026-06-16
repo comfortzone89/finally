@@ -148,6 +148,9 @@ class GBMSimulator:
         if ticker in self._prices:
             return
         self._tickers.append(ticker)
+        # Unknown tickers get a random seed price that is NOT persisted, so
+        # removing and re-adding one yields a different starting price. Fine
+        # for a simulator; documented in PLAN.md §6.
         self._prices[ticker] = SEED_PRICES.get(ticker, random.uniform(50.0, 300.0))
         self._params[ticker] = TICKER_PARAMS.get(ticker, dict(DEFAULT_PARAMS))
 
@@ -212,6 +215,8 @@ class SimulatorDataSource(MarketDataSource):
     ) -> None:
         self._cache = price_cache
         self._interval = update_interval
+        # Held here only until start() can forward it to the (lazily created)
+        # GBMSimulator, which is the single owner of this parameter.
         self._event_prob = event_probability
         self._sim: GBMSimulator | None = None
         self._task: asyncio.Task | None = None

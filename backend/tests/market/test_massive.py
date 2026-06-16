@@ -111,6 +111,19 @@ class TestMassiveDataSource:
         await source.add_ticker("AAPL")
         assert "AAPL" in source.get_tickers()
 
+    async def test_add_ticker_immediate_poll_seeds_cache(self):
+        """Adding a ticker (once started) polls immediately to seed the cache."""
+        cache = PriceCache()
+        source = MassiveDataSource(api_key="test-key", price_cache=cache, poll_interval=60.0)
+        source._client = MagicMock()  # Simulate a started client
+
+        mock_snapshots = [_make_snapshot("TSLA", 250.00, 1707580800000)]
+        with patch.object(source, "_fetch_snapshots", return_value=mock_snapshots):
+            await source.add_ticker("TSLA")
+
+        assert "TSLA" in source.get_tickers()
+        assert cache.get_price("TSLA") == 250.00
+
     async def test_add_ticker_uppercase_normalization(self):
         """Test that tickers are normalized to uppercase."""
         cache = PriceCache()

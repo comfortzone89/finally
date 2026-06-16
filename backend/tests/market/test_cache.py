@@ -101,3 +101,28 @@ class TestPriceCache:
         cache = PriceCache()
         update = cache.update("AAPL", 190.12345)
         assert update.price == 190.12
+
+    def test_reference_price_captured_on_first_update(self):
+        """The first price seen becomes the daily reference for the ticker."""
+        cache = PriceCache()
+        first = cache.update("AAPL", 190.00)
+        assert first.reference_price == 190.00
+
+        later = cache.update("AAPL", 200.00)
+        # Reference stays fixed at the session open, not the latest price.
+        assert later.reference_price == 190.00
+        assert later.daily_change == 10.00
+
+    def test_reference_price_reset_after_remove(self):
+        """Removing a ticker clears its reference; re-adding starts fresh."""
+        cache = PriceCache()
+        cache.update("AAPL", 190.00)
+        cache.remove("AAPL")
+        readded = cache.update("AAPL", 250.00)
+        assert readded.reference_price == 250.00
+
+    def test_zero_timestamp_preserved(self):
+        """A timestamp of 0.0 must be honored, not replaced with time.time()."""
+        cache = PriceCache()
+        update = cache.update("AAPL", 190.50, timestamp=0.0)
+        assert update.timestamp == 0.0

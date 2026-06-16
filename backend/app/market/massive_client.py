@@ -38,6 +38,9 @@ class MassiveDataSource(MarketDataSource):
         self._task: asyncio.Task | None = None
         self._client: RESTClient | None = None
 
+    # Cap for exponential backoff after repeated poll failures (e.g. 429s).
+    _MAX_BACKOFF = 120.0
+
     async def start(self, tickers: list[str]) -> None:
         self._client = RESTClient(api_key=self._api_key)
         self._tickers = list(tickers)
@@ -67,7 +70,12 @@ class MassiveDataSource(MarketDataSource):
         ticker = ticker.upper().strip()
         if ticker not in self._tickers:
             self._tickers.append(ticker)
-            logger.info("Massive: added ticker %s (will appear on next poll)", ticker)
+            logger.info("Massive: added ticker %s", ticker)
+            # Poll immediately so the new ticker has a price right away instead
+            # of being invisible for up to poll_interval (parity with the
+            # simulator, which seeds the cache on add). No-op until started.
+            if self._client:
+                await self._poll_once()
 
     async def remove_ticker(self, ticker: str) -> None:
         ticker = ticker.upper().strip()
@@ -81,20 +89,35 @@ class MassiveDataSource(MarketDataSource):
     # --- Internal ---
 
     async def _poll_loop(self) -> None:
-        """Poll on interval. First poll already happened in start()."""
-        while True:
-            await asyncio.sleep(self._interval)
-            await self._poll_once()
+        """Poll on interval. First poll already happened in start().
 
-    async def _poll_once(self) -> None:
-        """Execute one poll cycle: fetch snapshots, update cache."""
+        Backs off exponentially after failures so a sustained error (e.g. a
+        429 rate-limit) doesn't keep hammering the API at the same cadence.
+        """
+        backoff = self._interval
+        while True:
+            await asyncio.sleep(backoff)
+            ok = await self._poll_once()
+            backoff = self._interval if ok else min(backoff * 2, self._MAX_BACKOFF)
+
+    async def _poll_once(self) -> bool:
+        """Execute one poll cycle: fetch snapshots, update cache.
+
+        Returns True on success (or when there's nothing to poll), False if the
+        API call raised — the loop uses this to drive its backoff.
+        """
         if not self._tickers or not self._client:
-            return
+            return True
+
+        # Snapshot the ticker list on the event loop *before* handing it to the
+        # worker thread. add_ticker/remove_ticker mutate self._tickers on the
+        # loop, and reading it concurrently from another thread is not safe.
+        tickers = list(self._tickers)
 
         try:
             # The Massive RESTClient is synchronous — run in a thread to
             # avoid blocking the event loop.
-            snapshots = await asyncio.to_thread(self._fetch_snapshots)
+            snapshots = await asyncio.to_thread(self._fetch_snapshots, tickers)
             processed = 0
             for snap in snapshots:
                 try:
@@ -113,16 +136,18 @@ class MassiveDataSource(MarketDataSource):
                         getattr(snap, "ticker", "???"),
                         e,
                     )
-            logger.debug("Massive poll: updated %d/%d tickers", processed, len(self._tickers))
+            logger.debug("Massive poll: updated %d/%d tickers", processed, len(tickers))
+            return True
 
         except Exception as e:
             logger.error("Massive poll failed: %s", e)
-            # Don't re-raise — the loop will retry on the next interval.
+            # Don't re-raise — the loop will retry (with backoff) next interval.
             # Common failures: 401 (bad key), 429 (rate limit), network errors.
+            return False
 
-    def _fetch_snapshots(self) -> list:
+    def _fetch_snapshots(self, tickers: list[str]) -> list:
         """Synchronous call to the Massive REST API. Runs in a thread."""
         return self._client.get_snapshot_all(
             market_type=SnapshotMarketType.STOCKS,
-            tickers=self._tickers,
+            tickers=tickers,
         )
