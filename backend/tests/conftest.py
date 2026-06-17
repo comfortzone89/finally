@@ -1,11 +1,6 @@
-"""Pytest configuration and fixtures."""
+"""Pytest configuration and fixtures.
 
-import pytest
-
-
-@pytest.fixture
-def event_loop_policy():
-    """Use the default event loop policy for all async tests."""
-    import asyncio
-
-    return asyncio.DefaultEventLoopPolicy()
+Async settings (``asyncio_mode = "auto"`` and the default function-scoped event
+loop) are configured in ``pyproject.toml``; no custom event-loop fixture is
+needed here.
+"""

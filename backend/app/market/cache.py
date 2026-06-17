@@ -17,6 +17,9 @@ class PriceCache:
 
     def __init__(self) -> None:
         self._prices: dict[str, PriceUpdate] = {}
+        # Session-open / reference price per ticker, captured on the first
+        # update we see for that ticker. Used for the daily change %.
+        self._reference_prices: dict[str, float] = {}
         self._lock = Lock()
         self._version: int = 0  # Monotonically increasing; bumped on every update
 
@@ -24,17 +27,22 @@ class PriceCache:
         """Record a new price for a ticker. Returns the created PriceUpdate.
 
         Automatically computes direction and change from the previous price.
-        If this is the first update for the ticker, previous_price == price (direction='flat').
+        If this is the first update for the ticker, previous_price == price (direction='flat')
+        and that price also becomes the session-open reference for daily change.
         """
         with self._lock:
-            ts = timestamp or time.time()
+            ts = timestamp if timestamp is not None else time.time()
             prev = self._prices.get(ticker)
-            previous_price = prev.price if prev else price
+            rounded_price = round(price, 2)
+            previous_price = prev.price if prev else rounded_price
+            # First price seen for this ticker becomes its daily reference.
+            reference_price = self._reference_prices.setdefault(ticker, rounded_price)
 
             update = PriceUpdate(
                 ticker=ticker,
-                price=round(price, 2),
+                price=rounded_price,
                 previous_price=round(previous_price, 2),
+                reference_price=reference_price,
                 timestamp=ts,
             )
             self._prices[ticker] = update
@@ -60,11 +68,14 @@ class PriceCache:
         """Remove a ticker from the cache (e.g., when removed from watchlist)."""
         with self._lock:
             self._prices.pop(ticker, None)
+            # Drop the daily reference too, so re-adding starts a fresh session.
+            self._reference_prices.pop(ticker, None)
 
     @property
     def version(self) -> int:
         """Current version counter. Useful for SSE change detection."""
-        return self._version
+        with self._lock:
+            return self._version
 
     def __len__(self) -> int:
         with self._lock:

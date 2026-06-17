@@ -68,6 +68,31 @@ class TestPriceUpdate:
         assert result["change"] == 0.50
         assert result["change_percent"] == 0.2632  # (0.50 / 190.00) * 100
         assert result["direction"] == "up"
+        # No reference price supplied → daily fields read as zero.
+        assert result["reference_price"] == 0.0
+        assert result["daily_change"] == 0.0
+        assert result["daily_change_percent"] == 0.0
+
+    def test_daily_change_from_reference(self):
+        """Daily change is computed against the session-open reference price."""
+        update = PriceUpdate(
+            ticker="AAPL",
+            price=192.00,
+            previous_price=191.50,
+            reference_price=190.00,
+            timestamp=1234567890.0,
+        )
+        # tick-to-tick change uses previous_price
+        assert update.change == 0.50
+        # daily change uses the reference (open) price
+        assert update.daily_change == 2.00
+        assert update.daily_change_percent == round(2.00 / 190.00 * 100, 4)
+
+    def test_daily_change_zero_without_reference(self):
+        """With an unset (<=0) reference price, daily change is zero."""
+        update = PriceUpdate(ticker="AAPL", price=190.50, previous_price=190.00)
+        assert update.daily_change == 0.0
+        assert update.daily_change_percent == 0.0
 
     def test_immutability(self):
         """Test that PriceUpdate is immutable."""

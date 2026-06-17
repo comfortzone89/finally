@@ -177,8 +177,26 @@ Both the simulator and the Massive client implement the same abstract interface.
 - Endpoint: `GET /api/stream/prices`
 - Long-lived SSE connection; client uses native `EventSource` API
 - Server pushes price updates for all tickers known to the system at a regular cadence (~500ms) — in the single-user model this is equivalent to the user's watchlist
-- Each SSE event contains ticker, price, previous price, timestamp, and change direction
+- **Wire format:** each `data:` event carries a single atomic snapshot frame — a JSON object keyed by ticker, so the whole watchlist updates as one consistent frame rather than one event per ticker:
+
+  ```
+  data: {"AAPL": {"ticker": "AAPL", "price": 190.50, "previous_price": 190.42,
+                  "reference_price": 190.00, "timestamp": 1718500000.0,
+                  "change": 0.08, "change_percent": 0.042,
+                  "daily_change": 0.50, "daily_change_percent": 0.263,
+                  "direction": "up"}, "GOOGL": { ... }, ...}
+  ```
+
+  - `change` / `change_percent` / `direction` are **tick-to-tick** (relative to `previous_price`). The reference window differs by source: ~500ms for the simulator, ~poll interval (e.g. 15s) for Massive.
+  - `daily_change` / `daily_change_percent` are relative to `reference_price`, the session-open price (see §6 "Daily change" below) — this is the "daily change %" surfaced in the watchlist.
+- On connect the stream emits a `retry: 1000` directive (1s reconnect) and sends `: keepalive` comment frames during quiet periods to keep proxies from idle-dropping the connection.
 - Client handles reconnection automatically (EventSource has built-in retry)
+
+### Daily change
+
+The "daily change %" shown in the watchlist (§10) is computed **backend-side**. The `PriceCache` captures a per-ticker `reference_price` (the session-open price) the first time it sees a price for that ticker — at `start()` and when a ticker is added. Each `PriceUpdate` carries this `reference_price` and exposes `daily_change` / `daily_change_percent` derived from it. Removing a ticker clears its reference, so re-adding starts a fresh session baseline.
+
+> Note: unknown (non-seeded) tickers in the simulator get a random starting price that is not persisted, so removing and re-adding one yields a different baseline. This is acceptable for a simulator.
 
 ---
 
@@ -363,7 +381,7 @@ When `LLM_MOCK=true`, the backend returns deterministic mock responses instead o
 
 The frontend is a single-page application with a dense, terminal-inspired layout. The specific component architecture and layout system is up to the Frontend Engineer, but the UI should include these elements:
 
-- **Watchlist panel** — grid/table of watched tickers with: ticker symbol, current price (flashing green/red on change), daily change %, and a sparkline mini-chart (accumulated from SSE since page load)
+- **Watchlist panel** — grid/table of watched tickers with: ticker symbol, current price (flashing green/red on change), daily change % (the backend-provided `daily_change_percent` from the SSE frame — see §6 "Daily change"), and a sparkline mini-chart (accumulated from SSE since page load)
 - **Main chart area** — larger chart for the currently selected ticker, with at minimum price over time. Clicking a ticker in the watchlist selects it here.
 - **Portfolio heatmap** — treemap visualization where each rectangle is a position, sized by portfolio weight, colored by P&L (green = profit, red = loss)
 - **P&L chart** — line chart showing total portfolio value over time, using data from `portfolio_snapshots`
