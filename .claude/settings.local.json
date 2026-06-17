@@ -3,7 +3,10 @@
     "allow": [
       "WebSearch",
       "WebFetch(domain:massive.com)",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "Bash(grep -n \"SSE Streaming\\\\|Each SSE event\\\\|daily change\\\\|change %\" planning/../planning/PLAN.md)",
+      "Read(//mnt/c/Users/liadl/webdev/planning/**)",
+      "Bash(uv run *)"
     ]
   },
   "sandbox": {
